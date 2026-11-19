@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="theme-color" content="#000000">
 <title>Solo Leveling</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Solo Leveling">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -427,38 +434,33 @@ function figSVG(ex,size=44){const p=POSES[poseOf(ex)];const L=(a,b,w,c,o)=>`<lin
 const DEF_SETTINGS={name:'Hunter',bw:79,rest:120,vibrate:true,sound:true,maxReps:{},factors:{},est:{},muscles:{},gyms:[]};
 let S={settings:JSON.parse(JSON.stringify(DEF_SETTINGS)),plans:[],customEx:[],checkins:[],fitness:{log:[]},active:null,workouts:{},runs:{}};
 let UI={tab:'status',histTypes:['gym'],histWeeks:10,progEx:'bench-press-barbell',progMetric:'e1',woOpen:false,showAll:false};
-let DB=null,SYNC='local';
+let SYNC='local';
 function exById(id){return LIB[id]||S.customEx.find(e=>e.id===id)||{id,name:id,eq:'Other',muscle:'fullBody',sec:[],type:'w'}}
 function allEx(){return [...Object.values(LIB),...S.customEx]}
 function workoutsSorted(){return Object.values(S.workouts).filter(w=>w&&w.end).sort((a,b)=>b.start-a.start)}
 function runsSorted(){return Object.values(S.runs).filter(Boolean).sort((a,b)=>b.date-a.date)}
 function bw(){return num(S.settings.bw)||79}
 
-/* ============ persistence ============ */
-const LS='hunter-cache-v1';let lsTimer=null;
-function saveLocal(){clearTimeout(lsTimer);lsTimer=setTimeout(()=>{try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){}},300)}
-function loadLocal(){try{const j=JSON.parse(localStorage.getItem(LS)||'null');if(j){S=Object.assign(S,j);S.settings=Object.assign({},DEF_SETTINGS,j.settings||{})}}catch(e){}}
-const wq={};
-function docData(path){if(path==='lv/settings')return {v:S.settings};if(path==='lv/plans')return {list:S.plans};if(path==='lv/exercises')return {list:S.customEx};if(path==='lv/checkins')return {list:S.checkins};if(path==='lv/fitness')return {log:S.fitness.log||[]};if(path==='lv/active')return {w:S.active||null};
- const [c,id]=path.split('/');if(c==='workouts')return S.workouts[id]||null;if(c==='runs')return S.runs[id]||null;return null}
-function persist(path){saveLocal();if(!DB)return;const q=wq[path]||(wq[path]={busy:false,dirty:false,t:null});q.dirty=true;clearTimeout(q.t);q.t=setTimeout(()=>flush(path),path==='lv/active'?1500:500)}
-async function flush(path){const q=wq[path];if(q.busy||!q.dirty)return;q.busy=true;q.dirty=false;
- try{const d=docData(path);const ref=DB.doc(path);if(d)await ref.set(JSON.parse(JSON.stringify(d)));else await ref.delete();setSync('on')}
- catch(e){console.warn('db',path,e);if(e&&e.code==='quota_exceeded')toast('Storage full – copy a backup');setSync('err')}
- q.busy=false;if(q.dirty)flush(path)}
+/* ============ persistence (lokal: IndexedDB, Fallback localStorage) ============ */
+const LS='hunter-cache-v1',IDB_NAME='solo-leveling',IDB_STORE='kv',IDB_KEY='state';let saveTimer=null,IDB=null;
+function idbOpen(){return new Promise((res,rej)=>{if(!window.indexedDB)return rej(new Error('no idb'));const r=indexedDB.open(IDB_NAME,1);r.onupgradeneeded=()=>r.result.createObjectStore(IDB_STORE);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+function idbGet(){return new Promise((res,rej)=>{const t=IDB.transaction(IDB_STORE,'readonly').objectStore(IDB_STORE).get(IDB_KEY);t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error)})}
+function idbPut(v){return new Promise((res,rej)=>{const tx=IDB.transaction(IDB_STORE,'readwrite');tx.objectStore(IDB_STORE).put(v,IDB_KEY);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error)})}
+function applyState(j){if(!j)return;S=Object.assign(S,j);S.settings=Object.assign({},DEF_SETTINGS,j.settings||{})}
+async function saveNow(){clearTimeout(saveTimer);saveTimer=null;const snap=JSON.parse(JSON.stringify(S));
+ if(IDB){try{await idbPut(snap);setSync('on');return}catch(e){console.warn('idb',e);if(e&&e.name==='QuotaExceededError')toast('Storage full – copy a backup')}}
+ try{localStorage.setItem(LS,JSON.stringify(snap));setSync('on')}catch(e){setSync('err');toast('Could not save – copy a backup')}}
+function saveLocal(){clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,300)}
+function persist(path){saveLocal()}
 function setSync(s){SYNC=s}
-async function initDB(){if(!window.claude||!window.claude.use)return;let db=null;try{db=await window.claude.use('db')}catch(e){}if(!db)return;DB=db;
- const timer=setTimeout(()=>toast('Cloud data not reachable yet'),10000);
- try{const paths=['lv/settings','lv/plans','lv/exercises','lv/checkins','lv/fitness','lv/active'];const snaps=await Promise.all(paths.map(p=>db.doc(p).get()));
-  const ws=await db.collection('workouts').get();const rs=await db.collection('runs').get();clearTimeout(timer);
-  const any=snaps.some(s=>s.exists)||ws.size||rs.size;const cl=x=>JSON.parse(JSON.stringify(x));
-  if(any){const g=i=>snaps[i].exists?snaps[i].data():null;
-   if(g(0))S.settings=Object.assign({},DEF_SETTINGS,cl(g(0).v||{}));if(g(1))S.plans=cl(g(1).list||[]);if(g(2))S.customEx=cl(g(2).list||[]);if(g(3))S.checkins=cl(g(3).list||[]);if(g(4))S.fitness={log:cl(g(4).log||[])};
-   const act=g(5)?g(5).w:null;if(act&&!S.active)S.active=cl(act);
-   S.workouts={};ws.docs.forEach(d=>{S.workouts[d.id]=cl(d.data())});S.runs={};rs.docs.forEach(d=>{S.runs[d.id]=cl(d.data())});saveLocal()}
-  else{['lv/settings','lv/plans','lv/exercises','lv/checkins','lv/fitness'].forEach(persist);Object.keys(S.workouts).filter(id=>!S.workouts[id].imp).forEach(id=>persist('workouts/'+id));Object.keys(S.runs).forEach(id=>persist('runs/'+id))}
-  setSync('on');render();if(S.active&&UI.woOpen)renderWO()}
- catch(e){clearTimeout(timer);console.warn(e);setSync('err')}}
+async function initStore(){let j=null;
+ try{IDB=await idbOpen();j=await idbGet()}catch(e){console.warn('idb',e);IDB=null}
+ if(!j){try{j=JSON.parse(localStorage.getItem(LS)||'null')}catch(e){}if(j&&IDB)try{await idbPut(j);localStorage.removeItem(LS)}catch(e){}}
+ applyState(j);setSync(IDB?'on':'local');
+ try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}}
+/* ausstehende Änderungen sichern, wenn die App in den Hintergrund geht */
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&saveTimer)saveNow()});
+window.addEventListener('pagehide',()=>{if(saveTimer)saveNow()});
 
 /* ============ ranks ============ */
 const RANKS=['F','E','D','C','B','A','S','SS'];
@@ -658,7 +660,7 @@ function promptSheet(title,val,cb,opts={}){sheet(`<h3>${h(title)}</h3>${opts.hin
 /* ============ main render ============ */
 function render(){const v={train:vTrain,status:vStatus,history:vHistory}[UI.tab]();
  const tabs=[['train','TRAIN'],['status','STATUS'],['history','HISTORY']];
- $('#app').innerHTML=`<div class="top"><button class="iconbtn" data-act="fs" title="Fullscreen">${document.fullscreenElement?'⤡':'⛶'}</button><div class="t">SOLO <b>LEVELING</b></div><button class="iconbtn" data-act="settings">⚙</button></div>${v}
+ $('#app').innerHTML=`<div class="top"><span></span><div class="t">SOLO <b>LEVELING</b></div><button class="iconbtn" data-act="settings">⚙</button></div>${v}
  <div class="nav"><div class="in">${tabs.map(([k,l])=>`<button class="${UI.tab===k?'on':''}" data-act="tab" data-k="${k}">${ICON[k]}${l}</button>`).join('')}</div></div>
  ${S.active&&!UI.woOpen?`<div class="wobar" data-act="openWO"><span>▶ ${h(S.active.name)}</span><span id="wobarT">${fmtDur((Date.now()-S.active.start)/1000)}</span></div>`:''}`}
 
@@ -972,13 +974,12 @@ function settingsSheet(){const s=S.settings;const est=s.est||{};
  sheet(`<h3>Settings</h3><div class="grid2"><div class="field"><label>PLAYER NAME</label><input id="s_name" value="${h(s.name)}"></div><div class="field"><label>BODYWEIGHT (kg)</label><input id="s_bw" inputmode="decimal" value="${h(s.bw)}"></div>
  <div class="field"><label>DEFAULT REST</label><select id="s_rest">${[60,90,120,150,180,240].map(x=>`<option value="${x}" ${+s.rest===x?'selected':''}>${fmtDur(x)}</option>`).join('')}</select></div></div>
  <div class="row" style="padding:8px 0"><span class="sp">Vibrate when rest is over</span><input type="checkbox" id="s_vib" ${s.vibrate?'checked':''} style="width:auto"></div>
- <div class="row" style="padding:8px 0"><span class="sp">Fullscreen on first tap</span><input type="checkbox" id="s_fs" ${s.autoFs!==false?'checked':''} style="width:auto"></div>
  <div class="row" style="padding:8px 0"><span class="sp">Sound when rest is over</span><input type="checkbox" id="s_snd" ${s.sound?'checked':''} style="width:auto"></div>
  <details style="margin-top:10px"><summary class="sm" style="color:var(--acc2)"><span class="chev">›</span> Estimates (used until real data exists)</summary><p class="xs mu">0 = F · 1 = E · 2 = D · 3 = C · 4 = B · 5 = A · 6 = S · 7 = SS</p>
  <div class="grid3">${AX.map(([k,l])=>`<div class="field"><label>${l}</label><input inputmode="decimal" data-est="${k}" value="${h(est[k]??'')}"></div>`).join('')}</div></details>
  <button class="btn pri full" id="s_ok" style="margin-top:10px">Save</button>
- <div class="sec" style="margin-top:20px">Backup <span class="r">${SYNC==='on'?'Cloud: saved':SYNC==='err'?'Cloud: sync error':'Cloud: offline – saved on this device'}</span></div><div class="grid2"><button class="btn" id="s_exp">Copy backup</button><button class="btn" id="s_imp">Restore backup</button></div>`,'tall');
- $('#s_ok').onclick=()=>{s.name=$('#s_name').value.trim()||'Hunter';s.bw=num($('#s_bw').value)||s.bw;s.rest=+$('#s_rest').value;s.vibrate=$('#s_vib').checked;s.autoFs=$('#s_fs').checked;s.sound=$('#s_snd').checked;s.est=s.est||{};
+ <div class="sec" style="margin-top:20px">Backup <span class="r">${SYNC==='err'?'Save error – copy a backup':'Saved on this device'}</span></div><div class="grid2"><button class="btn" id="s_exp">Copy backup</button><button class="btn" id="s_imp">Restore backup</button></div>`,'tall');
+ $('#s_ok').onclick=()=>{s.name=$('#s_name').value.trim()||'Hunter';s.bw=num($('#s_bw').value)||s.bw;s.rest=+$('#s_rest').value;s.vibrate=$('#s_vib').checked;s.sound=$('#s_snd').checked;s.est=s.est||{};
   document.querySelectorAll('[data-est]').forEach(i=>{const v=num(i.value);if(v==null)delete s.est[i.dataset.est];else s.est[i.dataset.est]=clamp(v,0,7.99)});persist('lv/settings');closeSheet();render();toast('Saved')};
  $('#s_exp').onclick=()=>copyText(JSON.stringify({hunterBackup:1,...S,active:null}),'Backup copied');
  $('#s_imp').onclick=()=>{sheet(`<h3>Restore backup</h3><p class="sm mu">Replaces all current data.</p><textarea id="rbt" style="height:40vh;font-size:11px"></textarea><button class="btn bad full" id="rbok" style="margin-top:10px">Replace all data</button>`,'tall');
@@ -993,7 +994,6 @@ document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(
  case 'tab':UI.tab=k;render();window.scrollTo(0,0);break;
  case 'closeSheet':closeSheet();break;
  case 'settings':settingsSheet();break;
- case 'fs':toggleFS();break;
  case 'axis':axisSheet(k);break;
  case 'ranks':ranksSheet();break;
  case 'muscle':muscleSheet(t.dataset.m);break;
@@ -1063,14 +1063,9 @@ document.addEventListener('change',e=>{const t=e.target;if(t.id==='gpxin'&&t.fil
 /* ============ imported history (static file beside the page) ============ */
 async function loadImport(){try{const r=await fetch('strong-history.json');if(!r.ok)return;const j=await r.json();const hid=new Set(S.settings.hiddenImports||[]);let n=0;
  for(const w of j.workouts||[]){if(hid.has(w.id)||S.workouts[w.id])continue;S.workouts[w.id]=w;n++}if(n){render()}}catch(e){console.warn('import',e)}}
-/* ============ fullscreen ============ */
-function toggleFS(){const d=document;try{if(d.fullscreenElement||d.webkitFullscreenElement){(d.exitFullscreen||d.webkitExitFullscreen).call(d)}else{const el=d.documentElement;const f=el.requestFullscreen||el.webkitRequestFullscreen;const r=f.call(el,{navigationUI:'hide'});if(r&&r.catch)r.catch(()=>toast('Fullscreen not allowed here'))}}catch(e){toast('Fullscreen not allowed here')}}
-let FS_AUTO=true;document.addEventListener('pointerdown',e=>{if(!FS_AUTO)return;FS_AUTO=false;if(e.target.closest('[data-act=fs]'))return;try{if(S.settings.autoFs!==false&&!document.fullscreenElement){const el=document.documentElement;const f=el.requestFullscreen||el.webkitRequestFullscreen;const r=f&&f.call(el,{navigationUI:'hide'});if(r&&r.catch)r.catch(()=>{})}}catch(err){}},true);
-document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement)FS_AUTO=true;render()});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!document.fullscreenElement)FS_AUTO=true});
-window.addEventListener('focus',()=>{if(!document.fullscreenElement)FS_AUTO=true});
 /* ============ boot ============ */
-loadLocal();UI.woOpen=false;UI.tab='status';render();initDB().finally(loadImport);
+UI.woOpen=false;UI.tab='status';initStore().finally(()=>{render();loadImport()});
+if('serviceWorker' in navigator&&location.protocol!=='file:')window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(e=>console.warn('sw',e)));
 </script>
 </body>
 </html>
