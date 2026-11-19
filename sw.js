@@ -4,7 +4,7 @@
    - Im Hintergrund wird die neueste Version geladen und im Cache ersetzt
      → beim nächsten Öffnen läuft automatisch die neue Version.
    Eine Änderung an dieser Datei (z. B. VERSION hochzählen) installiert den SW neu. */
-const VERSION = 'v1';
+const VERSION = 'v3';
 const CACHE = 'solo-leveling-' + VERSION;
 const CORE = [
   './',
@@ -40,10 +40,13 @@ self.addEventListener('fetch', e => {
 
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    // Navigationen (App-Start) immer auf index.html abbilden
-    const key = req.mode === 'navigate' ? './index.html' : req;
-    const cached = await cache.match(key, { ignoreSearch: req.mode === 'navigate' });
-    const network = fetch(req.mode === 'navigate' ? './index.html' : req, { cache: 'no-cache' })
+    // Navigationen: jede Seite (index.html, preview.html …) unter ihrer eigenen Adresse cachen;
+    // "/" wird auf index.html abgebildet. Offline-Fallback ist index.html.
+    const nav = req.mode === 'navigate';
+    const path = url.pathname.endsWith('/') ? url.pathname + 'index.html' : url.pathname;
+    const key = nav ? path : req;
+    const cached = await cache.match(key, { ignoreSearch: nav });
+    const network = fetch(nav ? path : req, { cache: 'no-cache' })
       .then(res => {
         if (res && (res.ok || res.type === 'opaque')) cache.put(key, res.clone());
         return res;
@@ -54,6 +57,7 @@ self.addEventListener('fetch', e => {
       return cached;
     }
     const res = await network;
+    if (!res && nav) { const home = await cache.match('./index.html'); if (home) return home; }
     return res || new Response('Offline', { status: 503, statusText: 'Offline' });
   })());
 });
