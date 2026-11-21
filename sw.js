@@ -4,7 +4,7 @@
    - Im Hintergrund wird die neueste Version geladen und im Cache ersetzt
      → beim nächsten Öffnen läuft automatisch die neue Version.
    Eine Änderung an dieser Datei (z. B. VERSION hochzählen) installiert den SW neu. */
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = 'solo-leveling-' + VERSION;
 const CORE = [
   './',
@@ -59,5 +59,16 @@ self.addEventListener('fetch', e => {
     const res = await network;
     if (!res && nav) { const home = await cache.match('./index.html'); if (home) return home; }
     return res || new Response('Offline', { status: 503, statusText: 'Offline' });
+  })());
+});
+
+// Pausen-Benachrichtigung: Knöpfe (+30 sec / Skip) an die App weitergeben, Tippen öffnet die App
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (e.action) { cs.forEach(c => c.postMessage({ rest: e.action })); return; }
+    if (cs.length) return cs[0].focus();
+    return self.clients.openWindow('./');
   })());
 });
