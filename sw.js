@@ -4,7 +4,7 @@
    - Im Hintergrund wird die neueste Version geladen und im Cache ersetzt
      → beim nächsten Öffnen läuft automatisch die neue Version.
    Eine Änderung an dieser Datei (z. B. VERSION hochzählen) installiert den SW neu. */
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = 'solo-leveling-' + VERSION;
 const CORE = [
   './',
@@ -63,9 +63,11 @@ self.addEventListener('fetch', e => {
 });
 
 /* ===== Pausen-Timer im Hintergrund =====
-   Android friert die App im Hintergrund ein. Deshalb zählt der Service Worker die Pause herunter,
-   aktualisiert die Benachrichtigung jede Sekunde und meldet am Ende mit Vibration "Go". */
-let REST = null;            // {id,end,total,title,set,vib}
+   Android friert die App im Hintergrund ein. Deshalb zählt der Service Worker die Pause herunter.
+   live=true: Anzeige mit Countdown (jede Sekunde aktualisiert). live=false: nur eine "Go"-Meldung am Ende
+   (gut für Smartwatches, die sonst jede Aktualisierung als neue Meldung bekommen). */
+let REST = null;            // {id,end,total,title,set,vib,live,tok}
+let TOK = 0;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fmt = s => { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
@@ -73,26 +75,31 @@ async function closeRest() {
   const ns = await self.registration.getNotifications({ tag: 'rest' });
   ns.forEach(n => n.close());
 }
-function showRest(r) {
+async function showRest(r) {
+  // Doppelte Anzeigen (z. B. einmal unter Chrome, einmal unter der App) aufräumen
+  const ns = await self.registration.getNotifications({ tag: 'rest' });
+  if (ns.length > 1) ns.forEach(n => n.close());
   const left = (r.end - Date.now()) / 1000, k = Math.round(Math.min(1, Math.max(0, 1 - left / r.total)) * 12);
   const bar = '▰'.repeat(k) + '▱'.repeat(12 - k);
+  const { tok, ...data } = r;
   return self.registration.showNotification(r.title, {
     tag: 'rest', body: `${fmt(left)}   ${bar}${r.set ? '\n' + r.set : ''}`, silent: true, renotify: false,
-    requireInteraction: true, icon: 'icons/icon-192.png', data: r,
+    requireInteraction: true, icon: 'icons/icon-192.png', data,
     actions: [{ action: 'add30', title: '+30 sec' }, { action: 'skip', title: 'Skip' }]
   });
 }
 async function runRest(r) {
-  REST = r; await closeRest();
-  while (REST && REST.id === r.id && Date.now() < REST.end) {
-    await showRest(REST);
-    await sleep(Math.min(1000, Math.max(50, REST.end - Date.now())));
+  const tok = ++TOK; REST = { ...r, tok }; await closeRest();
+  while (REST && REST.tok === tok && Date.now() < REST.end) {
+    if (REST.live) await showRest(REST);
+    await sleep(Math.min(REST.live ? 1000 : 5000, Math.max(50, REST.end - Date.now())));
   }
-  if (!REST || REST.id !== r.id) return;
-  REST = null;
-  await self.registration.showNotification(r.title.replace(/^Next:/, 'Go:'), {
-    tag: 'rest', body: r.set || 'Rest over', renotify: true, silent: false,
-    vibrate: r.vib ? [300, 120, 300] : [], icon: 'icons/icon-192.png', data: { done: true }
+  if (!REST || REST.tok !== tok) return;
+  const fin = REST; REST = null;
+  await closeRest();
+  await self.registration.showNotification(fin.title.replace(/^Next:/, 'Go:'), {
+    tag: 'rest', body: fin.set || 'Rest over', renotify: true, silent: false,
+    vibrate: fin.vib ? [300, 120, 300] : [], icon: 'icons/icon-192.png', data: { done: true }
   });
   setTimeout(() => closeRest(), 60000);
 }
@@ -103,8 +110,8 @@ async function tellClients(msg) {
 
 self.addEventListener('message', e => {
   const d = e.data || {};
-  if (d.type === 'restStart') e.waitUntil(runRest({ id: d.id, end: d.end, total: d.total, title: d.title, set: d.set, vib: d.vib }));
-  if (d.type === 'restStop') { REST = null; e.waitUntil(closeRest()); }
+  if (d.type === 'restStart') e.waitUntil(runRest({ id: d.id, end: d.end, total: d.total, title: d.title, set: d.set, vib: d.vib, live: d.live !== false }));
+  if (d.type === 'restStop') { REST = null; TOK++; e.waitUntil(closeRest()); }
 });
 
 self.addEventListener('notificationclick', e => {

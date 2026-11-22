@@ -443,7 +443,7 @@ function figSVG(ex,size=44){const p=POSES[poseOf(ex)];const L=(a,b,w,c,o)=>`<lin
  return `<svg class="fig" viewBox="0 0 40 40" width="${size}" height="${size}" style="width:${size}px;height:${size}px">${s}</svg>`}
 
 /* ============ state ============ */
-const DEF_SETTINGS={name:'Hunter',bw:79,rest:120,vibrate:true,sound:true,restNote:true,maxReps:{},factors:{},est:{},muscles:{},gyms:[]};
+const DEF_SETTINGS={name:'Hunter',bw:79,rest:120,vibrate:true,sound:true,restNote:true,restLive:true,maxReps:{},factors:{},est:{},muscles:{},gyms:[]};
 let S={settings:JSON.parse(JSON.stringify(DEF_SETTINGS)),plans:[],customEx:[],checkins:[],fitness:{log:[]},active:null,workouts:{},runs:{}};
 let UI={tab:'status',histTypes:['gym'],histWeeks:10,progEx:'g:bench-press-barbell',progMetric:'e1',woOpen:false,showAll:false};
 let SYNC='local';
@@ -892,7 +892,7 @@ function exCard(e,ei){const ex=exById(e.ex);const bwp=ex.type==='bwp';
   :`<div class="rest" data-act="restEdit" data-ei="${ei}" data-si="${si}"><div class="ln"><i></i></div><span>${fmtDur(e.rest||S.settings.rest)}</span><div class="ln"><i></i></div></div>`}`}).join('')}
  <button class="link" data-act="addSet" data-ei="${ei}" style="padding:6px">+ Add set (${fmtDur(e.rest||S.settings.rest)})</button></div>`}
 function woSave(){persist('lv/active')}
-function startRest(ei,si){const e=S.active.exs[ei];const sec=e.rest||S.settings.rest;if(!sec)return;REST={end:Date.now()+sec*1000,total:sec,ei,si};unlockAudio();prepCountdown();askNotif();renderWO();if(document.hidden)restNotify()}
+function startRest(ei,si){const e=S.active.exs[ei];const sec=e.rest||S.settings.rest;if(!sec)return;REST={end:Date.now()+sec*1000,total:sec,ei,si};unlockAudio();scheduleRestAudio();askNotif();renderWO();if(document.hidden)restNotify()}
 /* Countdown: 3 leise Pieptöne + Schlusston als kurze Audiodatei (< 5 s).
    Kurze Medien bekommen unter Android nur "transienten" Audio-Fokus → laufende Musik wird kurz leiser statt pausiert. */
 let CDA=null,CDA_URL=null;
@@ -903,23 +903,34 @@ function cdWav(){const sr=22050,dur=3.5,n=Math.floor(sr*dur),buf=new ArrayBuffer
  return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}))}
 function prepCountdown(){if(!S.settings.sound)return;try{if(!CDA){CDA_URL=CDA_URL||cdWav();CDA=new Audio(CDA_URL);CDA.preload='auto';CDA.load()}}catch(e){}}
 function playCountdown(){if(!S.settings.sound||!CDA)return false;try{CDA.currentTime=0;const p=CDA.play();if(p&&p.catch)p.catch(()=>beep());return true}catch(e){return false}}
-function stopCountdown(){try{if(CDA&&!CDA.paused){CDA.pause();CDA.currentTime=0}}catch(e){}}
+function stopCountdown(){cancelRestAudio();try{if(CDA&&!CDA.paused){CDA.pause();CDA.currentTime=0}}catch(e){}}
+/* Pausen-Töne fest auf der Audio-Zeitleiste einplanen: läuft im Audio-Thread weiter, auch wenn Android die Seite
+   im Hintergrund drosselt. Ein unhörbar leises Signal hält die Tonausgabe währenddessen aktiv. */
+let RA=null;
+function scheduleRestAudio(){cancelRestAudio();if(!REST||!S.settings.sound)return;unlockAudio();if(!ACtx)return;
+ try{const t0=ACtx.currentTime+.05,left=Math.max(0,(REST.end-Date.now())/1000),nodes=[];
+  const ka=ACtx.createOscillator(),kg=ACtx.createGain();ka.frequency.value=30;kg.gain.value=.0008;ka.connect(kg);kg.connect(ACtx.destination);ka.start(t0);ka.stop(t0+left+1.5);nodes.push(ka);
+  [[3,1568,.75,.16],[2,1568,.75,.16],[1,1568,.75,.16],[0,2093,1,.6]].forEach(([b,f,a,len])=>{const st=t0+left-b;if(st<t0)return;
+   const o=ACtx.createOscillator(),g=ACtx.createGain();o.type='triangle';o.frequency.value=f;g.gain.setValueAtTime(0,st);g.gain.linearRampToValueAtTime(a,st+.01);g.gain.setValueAtTime(a,st+len-.05);g.gain.linearRampToValueAtTime(0,st+len);
+   o.connect(g);g.connect(ACtx.destination);o.start(st);o.stop(st+len+.05);nodes.push(o)});
+  RA=nodes}catch(e){RA=null}}
+function cancelRestAudio(){if(RA){RA.forEach(n=>{try{n.stop()}catch(e){}});RA=null}}
 /* Benachrichtigung während der Pause (wenn die App im Hintergrund ist) */
 function nextSetInfo(){if(!S.active||!REST)return null;const w=S.active;for(let i=REST.ei;i<w.exs.length;i++){const e=w.exs[i];const from=i===REST.ei?REST.si+1:0;for(let j=from;j<e.sets.length;j++){const s=e.sets[j];if(s.done)continue;const ex=exById(e.ex);const p=prevFor(e.ex,e.sets,j);const kg=s.kg!==''?s.kg:(p?p.kg:'');const reps=s.reps!==''?s.reps:(p?p.reps:'');
   return {name:ex.name,set:(reps!==''&&reps!=null)?setStr({t:'n',kg:kg===''?(ex.type==='bwp'?0:''):kg,reps},ex):''}}}return null}
 function askNotif(){try{if(!S.settings.restNote||!('Notification' in window)||Notification.permission!=='default'||S.settings.notifAsked)return;S.settings.notifAsked=true;persist('lv/settings');Notification.requestPermission()}catch(e){}}
 function restNotify(){try{if(!REST||!S.settings.restNote||!('Notification' in window)||Notification.permission!=='granted'||!navigator.serviceWorker||!navigator.serviceWorker.controller)return;
  REST.id=REST.id||('r'+Date.now());const nx=nextSetInfo();
- navigator.serviceWorker.controller.postMessage({type:'restStart',id:REST.id,end:REST.end,total:REST.total,title:nx?`Next: ${nx.name}`:'Resting',set:nx&&nx.set?nx.set:'',vib:!!S.settings.vibrate});REST.sw=true}catch(e){}}
+ navigator.serviceWorker.controller.postMessage({type:'restStart',id:REST.id,end:REST.end,total:REST.total,title:nx?`Next: ${nx.name}`:'Resting',set:nx&&nx.set?nx.set:'',vib:!!S.settings.vibrate,live:S.settings.restLive!==false});REST.sw=true}catch(e){}}
 function closeRestNote(){try{if(navigator.serviceWorker&&navigator.serviceWorker.controller)navigator.serviceWorker.controller.postMessage({type:'restStop'});else navigator.serviceWorker&&navigator.serviceWorker.ready.then(r=>r.getNotifications({tag:'rest'})).then(ns=>ns.forEach(n=>n.close())).catch(()=>{})}catch(e){}if(REST)REST.sw=false}
-if(navigator.serviceWorker)navigator.serviceWorker.addEventListener('message',m=>{const a=m.data&&m.data.rest;if(!a||!REST)return;if(a==='add30'){REST.end+=30000;REST.total+=30;REST.cd=false;stopCountdown();renderWO()}if(a==='skip'){REST=null;stopCountdown();renderWO()}});
+if(navigator.serviceWorker)navigator.serviceWorker.addEventListener('message',m=>{const a=m.data&&m.data.rest;if(!a||!REST)return;if(a==='add30'){REST.end+=30000;REST.total+=30;REST.cd=false;scheduleRestAudio();renderWO()}if(a==='skip'){REST=null;stopCountdown();renderWO()}});
 function unlockAudio(){try{if(!ACtx)ACtx=new (window.AudioContext||window.webkitAudioContext)();if(ACtx.state==='suspended')ACtx.resume()}catch(e){}}
 function beep(){if(!S.settings.sound||!ACtx)return;try{[0,.22,.44].forEach(d=>{const o=ACtx.createOscillator(),g=ACtx.createGain();o.frequency.value=d===.44?1320:880;o.connect(g);g.connect(ACtx.destination);g.gain.setValueAtTime(.0001,ACtx.currentTime+d);g.gain.exponentialRampToValueAtTime(.3,ACtx.currentTime+d+.02);g.gain.exponentialRampToValueAtTime(.0001,ACtx.currentTime+d+.18);o.start(ACtx.currentTime+d);o.stop(ACtx.currentTime+d+.2)})}catch(e){}}
-function restDone(){const late=REST&&Date.now()-REST.end>4000;const played=REST&&REST.cd;if(S.settings.vibrate){try{navigator.vibrate&&navigator.vibrate(350)}catch(e){}}if(!played||late)beep();
+function restDone(){const late=REST&&Date.now()-REST.end>4000;const played=(REST&&REST.cd)||!!RA;RA=null;if(S.settings.vibrate){try{navigator.vibrate&&navigator.vibrate(350)}catch(e){}}if(!played||late)beep();
  const sw=REST&&REST.sw;if(!document.hidden&&sw)closeRestNote();if(!document.hidden)toast('Rest over');REST=null;renderWO()}
-setInterval(()=>{if(S.active){const t=fmtDur((Date.now()-S.active.start)/1000);const a=$('#woT');if(a)a.textContent=t;const b=$('#wobarT');if(b)b.textContent=t}
+setInterval(()=>{if(!REST&&RA)cancelRestAudio();if(S.active){const t=fmtDur((Date.now()-S.active.start)/1000);const a=$('#woT');if(a)a.textContent=t;const b=$('#wobarT');if(b)b.textContent=t}
  if(REST){const left=(REST.end-Date.now())/1000;if(left<=0){restDone();return}
-  if(left<=3.05&&!REST.cd&&REST.total>4){REST.cd=playCountdown()}else if(left>3.3&&REST.cd){REST.cd=false;stopCountdown()}
+  if(!RA&&left<=3.05&&!REST.cd&&REST.total>4){prepCountdown();REST.cd=playCountdown()}
   const f=$('#restfill');if(f)f.style.width=(100-left/REST.total*100)+'%';const l=$('#restlbl');if(l)l.textContent=fmtDur(left);const rb=$('#restbtn');if(rb)rb.textContent=fmtDur(left)}},250);
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(REST)restNotify();return}closeRestNote();if(REST&&REST.end<=Date.now())restDone()});
 function boltPaths(){let o='';for(let i=0;i<7;i++){let x=40+Math.random()*320,y=-10;let d=`M${x} ${y}`;const tx=200+(Math.random()-.5)*80,ty=300+(Math.random()-.5)*60;const n=7;for(let k=1;k<=n;k++){x+=(tx-x)/(n-k+1)+(Math.random()-.5)*60;y+=(ty-y)/(n-k+1)+(Math.random()-.5)*20;d+=` L${x.toFixed(0)} ${y.toFixed(0)}`}o+=`<path d="${d}" style="animation-delay:${(.15+Math.random()*.85).toFixed(2)}s"/>`}return o}
@@ -976,7 +987,7 @@ function exMenu(ei){const e=S.active.exs[ei];const ex=exById(e.ex);
 function setMenu(ei,si){const s=S.active.exs[ei].sets[si];sheet(`<h3>Set type</h3><div class="menu">${[['n','Normal'],['w','W · Warm-up'],['d','D · Drop set'],['f','F · Failure']].map(([t,l])=>`<button data-act="setType" data-t="${t}" data-ei="${ei}" data-si="${si}">${s.t===t?'● ':''}${l}</button>`).join('')}<button class="bad" data-act="delSet" data-ei="${ei}" data-si="${si}">Delete set</button></div>`)}
 function restSheet(onPick,cur){sheet(`<h3>Rest time</h3><div class="grid3">${[0,30,45,60,90,120,150,180,240,300].map(s=>`<button class="btn ${s===cur?'pri':''}" data-rs="${s}">${s?fmtDur(s):'Off'}</button>`).join('')}</div>`);document.querySelectorAll('[data-rs]').forEach(b=>b.onclick=()=>{closeSheet();onPick(+b.dataset.rs)})}
 function restMenu(){if(REST){sheet(`<h3>Rest timer</h3><div class="hd" style="font-size:42px;text-align:center" id="rmT">${fmtDur((REST.end-Date.now())/1000)}</div><div class="grid3"><button class="btn" id="rm1">−15 s</button><button class="btn" id="rm2">+15 s</button><button class="btn bad" id="rm3">Skip</button></div>`);
-  const upd=()=>$('#rmT').textContent=fmtDur((REST.end-Date.now())/1000);$('#rm1').onclick=()=>{REST.end-=15000;REST.total-=15;upd()};$('#rm2').onclick=()=>{REST.end+=15000;REST.total+=15;upd()};$('#rm3').onclick=()=>{REST=null;stopCountdown();closeSheet();renderWO()};return}
+  const upd=()=>$('#rmT').textContent=fmtDur((REST.end-Date.now())/1000);$('#rm1').onclick=()=>{REST.end-=15000;REST.total-=15;scheduleRestAudio();upd()};$('#rm2').onclick=()=>{REST.end+=15000;REST.total+=15;scheduleRestAudio();upd()};$('#rm3').onclick=()=>{REST=null;stopCountdown();closeSheet();renderWO()};return}
  restSheet(s=>{if(s){REST={end:Date.now()+s*1000,total:s,ei:-1,si:-1};unlockAudio();renderWO()}})}
 
 /* ---------- picker ---------- */
@@ -1048,11 +1059,12 @@ function settingsSheet(){const s=S.settings;const est=s.est||{};
  <div class="row" style="padding:8px 0"><span class="sp">Vibrate when rest is over</span><input type="checkbox" id="s_vib" ${s.vibrate?'checked':''} style="width:auto"></div>
  <div class="row" style="padding:8px 0"><span class="sp">Countdown sound when rest is over</span><input type="checkbox" id="s_snd" ${s.sound?'checked':''} style="width:auto"></div>
  <div class="row" style="padding:8px 0"><span class="sp">Rest notification when the app is in the background</span><input type="checkbox" id="s_rn" ${s.restNote?'checked':''} style="width:auto"></div>
+ <div class="row" style="padding:8px 0"><span class="sp">Live countdown in the notification<div class="xs mu">Off = only one "Go" message when the rest is over (no spam on smartwatches)</div></span><input type="checkbox" id="s_rl" ${s.restLive!==false?'checked':''} style="width:auto"></div>
  <details style="margin-top:10px"><summary class="sm" style="color:var(--acc2)"><span class="chev">›</span> Estimates (used until real data exists)</summary><p class="xs mu">0 = F · 1 = E · 2 = D · 3 = C · 4 = B · 5 = A · 6 = S · 7 = SS</p>
  <div class="grid3">${AX.map(([k,l])=>`<div class="field"><label>${l}</label><input inputmode="decimal" data-est="${k}" value="${h(est[k]??'')}"></div>`).join('')}</div></details>
  <button class="btn pri full" id="s_ok" style="margin-top:10px">Save</button>
  <div class="sec" style="margin-top:20px">Backup <span class="r">${SYNC==='err'?'Save error – copy a backup':'Saved on this device'}</span></div><div class="grid2"><button class="btn" id="s_exp">Copy backup</button><button class="btn" id="s_imp">Restore backup</button></div>`,'tall');
- $('#s_ok').onclick=()=>{s.name=$('#s_name').value.trim()||'Hunter';s.bw=num($('#s_bw').value)||s.bw;s.rest=+$('#s_rest').value;s.vibrate=$('#s_vib').checked;s.sound=$('#s_snd').checked;s.restNote=$('#s_rn').checked;if(s.restNote&&'Notification' in window&&Notification.permission==='default')Notification.requestPermission();s.est=s.est||{};
+ $('#s_ok').onclick=()=>{s.name=$('#s_name').value.trim()||'Hunter';s.bw=num($('#s_bw').value)||s.bw;s.rest=+$('#s_rest').value;s.vibrate=$('#s_vib').checked;s.sound=$('#s_snd').checked;s.restNote=$('#s_rn').checked;s.restLive=$('#s_rl').checked;if(s.restNote&&'Notification' in window&&Notification.permission==='default')Notification.requestPermission();s.est=s.est||{};
   document.querySelectorAll('[data-est]').forEach(i=>{const v=num(i.value);if(v==null)delete s.est[i.dataset.est];else s.est[i.dataset.est]=clamp(v,0,7.99)});persist('lv/settings');closeSheet();render();toast('Saved')};
  $('#s_exp').onclick=()=>copyText(JSON.stringify({hunterBackup:1,...S,active:null}),'Backup copied');
  $('#s_imp').onclick=()=>{sheet(`<h3>Restore backup</h3><p class="sm mu">Replaces all current data. Paste the backup text or load a backup file (.txt).</p><label class="btn full" style="margin-bottom:10px;text-align:center;cursor:pointer">Load backup file<input type="file" id="rbf" accept=".txt,.json,text/plain,application/json" style="display:none"></label><textarea id="rbt" style="height:34vh;font-size:11px"></textarea><button class="btn bad full" id="rbok" style="margin-top:10px">Replace all data</button>`,'tall');
