@@ -783,10 +783,14 @@ function locations(){const g={};workoutsSorted().forEach(w=>{if(!w.gym)return;co
  return `<div class="card"><div class="sec">Locations</div>${e.map(([k,n])=>`<div class="row sm" style="padding:5px 0"><span style="width:110px" class="sp">${h(k)}</span><div class="bar" style="flex:1"><i style="width:${n/tot*100}%"></i></div><span class="mu" style="width:28px;text-align:right">${n}</span></div>`).join('')}</div>`}
 const MAIN_LIFTS=['bench-press-barbell','seated-leg-press-machine','pull-up','lat-pulldown-cable'];
 function progress(){const done=new Set();workoutsSorted().forEach(w=>w.exs.forEach(e=>done.add(e.ex)));
- const groups={};for(const id of done){const b=baseOf(id);(groups[b]=groups[b]||[]).push(id)}MAIN_LIFTS.forEach(b=>{groups[b]=groups[b]||[]});
- const nm=id=>exById(id).name,short=(id,b)=>id===b?'(no note)':(exById(id).variant?normNote(nm(id).slice(nm(b).length).replace(/^\s*·\s*/,'')):nm(id));
- let sel=UI.progEx||'g:bench-press-barbell';if(!sel.startsWith('g:')&&!(groups[baseOf(sel)]||[]).includes(sel))sel='g:'+baseOf(sel);
- const isG=sel.startsWith('g:'),base=isG?sel.slice(2):baseOf(sel),members=(groups[base]||[]).slice().sort((a,b)=>a===base?-1:b===base?1:nm(a).localeCompare(nm(b))),ids=isG?(members.length?members:[base]):[sel];
+ const nm=id=>exById(id).name,gname=id=>nm(baseOf(id)).replace(/\s+\d+$/,'').trim(),gkey=id=>gname(id).toLowerCase();
+ // Gruppen: gleiche Übung ohne Zahl am Ende und ohne Notiz ("Face Pull (Cable) 1/2", "Bench Press · Uni" …)
+ const byKey={};for(const id of done){const k=gkey(id);(byKey[k]=byKey[k]||[]).push(id)}MAIN_LIFTS.forEach(b=>{const k=gkey(b);byKey[k]=byKey[k]||[]});
+ const groups={};for(const k in byKey){const mem=byKey[k];const rep=MAIN_LIFTS.find(b=>gkey(b)===k)||mem.find(i=>LIB[i]&&gkey(i)===k&&nm(i).toLowerCase()===k)||mem.slice().sort((a,b)=>nm(a).length-nm(b).length)[0];groups[rep]=mem}
+ const repOf=id=>Object.keys(groups).find(r=>groups[r].includes(id)||r===id)||id;
+ const short=(id,b)=>{const r=nm(id).slice(gname(b).length).replace(/^\s*·\s*/,'').trim();return r||'(no note)'};
+ let sel=UI.progEx||'g:bench-press-barbell';if(sel.startsWith('g:')){if(!groups[sel.slice(2)])sel='g:'+repOf(sel.slice(2))}else if(!done.has(sel))sel='g:'+repOf(sel);
+ const isG=sel.startsWith('g:'),base=isG?sel.slice(2):repOf(sel),members=(groups[base]||[]).slice().sort((a,b)=>short(a,base)==='(no note)'?-1:short(b,base)==='(no note)'?1:nm(a).localeCompare(nm(b))),ids=isG?(members.length?members:[base]):[sel];
  const ex=exById(base);const bwp=ex.type==='bwp';const pts=[],best=[],vol=[];let top=null;
  for(const w of workoutsSorted().slice().reverse()){let b=0,hv=0,v=0,any=false;
   for(const e of w.exs){if(!ids.includes(e.ex))continue;const ds=e.sets.filter(s=>s.done!==false&&s.t!=='w'&&num(s.reps));if(!ds.length)continue;any=true;let eb=0,ehv=0,ev=0;
@@ -794,9 +798,9 @@ function progress(){const done=new Set();workoutsSorted().forEach(w=>w.exs.forEa
    b=Math.max(b,eb);hv=Math.max(hv,ehv);v=Math.max(v,ev)}
   if(any){pts.push([w.start,b]);best.push([w.start,hv]);vol.push([w.start,v])}}
  const m=UI.progMetric;const ser=m==='e1'?pts:m==='top'?best:vol;
- const opt=b=>{const mem=(groups[b]||[]).slice().sort((x,y)=>x===b?-1:y===b?1:nm(x).localeCompare(nm(y)));let o=`<option value="g:${b}" ${sel==='g:'+b?'selected':''}>${h(nm(b))}${mem.length>1?` · all (${mem.length})`:''}</option>`;
+ const opt=b=>{const mem=(groups[b]||[]).slice().sort((x,y)=>short(x,b)==='(no note)'?-1:short(y,b)==='(no note)'?1:nm(x).localeCompare(nm(y)));let o=`<option value="g:${b}" ${sel==='g:'+b?'selected':''}>${h(gname(b))}${mem.length>1?` · all (${mem.length})`:''}</option>`;
   if(mem.length>1)o+=mem.map(i=>`<option value="${i}" ${sel===i?'selected':''}>&nbsp;&nbsp;↳ ${h(short(i,b))}</option>`).join('');return o};
- const others=Object.keys(groups).filter(b=>!MAIN_LIFTS.includes(b)).sort((a,b)=>nm(a).localeCompare(nm(b)));
+ const others=Object.keys(groups).filter(b=>!MAIN_LIFTS.includes(b)).sort((a,b)=>gname(a).localeCompare(gname(b)));
  const inc=isG&&members.length>1?`<div class="xs mu" style="margin:-2px 0 6px">Combined – best value per workout from: ${members.map(i=>h(short(i,base))).join(', ')}</div>`:'';
  return `<select data-act-change="progEx" style="margin-bottom:8px"><optgroup label="Main lifts">${MAIN_LIFTS.map(opt).join('')}</optgroup>${others.length?`<optgroup label="All exercises">${others.map(opt).join('')}</optgroup>`:''}</select>
  <div class="chips">${[['e1','Est. 1RM'],['top','Heaviest weight'],['vol','Volume']].map(([k,l])=>`<button class="chip ${m===k?'on':''}" data-act="progMetric" data-k="${k}">${l}</button>`).join('')}</div>${inc}
